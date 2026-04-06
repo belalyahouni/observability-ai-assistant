@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "observability-assistant": {
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "mcp-server",
+      "env": {
+        "PROMETHEUS_URL": "http://localhost:9090",
+        "LOKI_URL": "http://localhost:3100",
+        "TEMPO_URL": "http://localhost:3200"
+      }
+    }
+  }
+}
