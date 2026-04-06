@@ -1,19 +1,29 @@
 import os
+import sys
 import random
 import time
 import logging
 
 from fastapi import FastAPI, HTTPException
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.telemetry import setup_telemetry
+
 app = FastAPI(title="User Service")
+tracer, meter = setup_telemetry(app, "user-service")
 logger = logging.getLogger("user-service")
+
+# Custom metrics
+request_counter = meter.create_counter(
+    "user_service.requests.total",
+    description="Total requests to user service",
+)
 
 # Fault injection
 FAULT_ENABLED = os.getenv("FAULT_ENABLED", "false").lower() == "true"
 FAULT_LATENCY_MS = int(os.getenv("FAULT_LATENCY_MS", "0"))
 FAULT_ERROR_RATE = float(os.getenv("FAULT_ERROR_RATE", "0.0"))
 
-# Simulated user database
 USERS = {
     "user-1": {"id": "user-1", "name": "Alice Johnson", "plan": "premium"},
     "user-2": {"id": "user-2", "name": "Bob Smith", "plan": "free"},
@@ -38,9 +48,11 @@ def health():
 
 @app.get("/users/{user_id}")
 def get_user(user_id: str):
+    request_counter.add(1, {"endpoint": "/users/id", "method": "GET"})
     maybe_inject_fault()
     user = USERS.get(user_id)
     if not user:
+        logger.warning("User %s not found", user_id)
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
     logger.info("Fetched user %s", user_id)
     return user
@@ -48,6 +60,7 @@ def get_user(user_id: str):
 
 @app.get("/users")
 def list_users():
+    request_counter.add(1, {"endpoint": "/users", "method": "GET"})
     maybe_inject_fault()
     logger.info("Listing all users")
     return list(USERS.values())

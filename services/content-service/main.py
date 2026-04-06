@@ -1,4 +1,5 @@
 import os
+import sys
 import random
 import time
 import logging
@@ -6,11 +7,24 @@ import logging
 import httpx
 from fastapi import FastAPI, HTTPException
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.telemetry import setup_telemetry
+
 app = FastAPI(title="Content Service")
+tracer, meter = setup_telemetry(app, "content-service")
 logger = logging.getLogger("content-service")
 
+# Custom metrics
+request_counter = meter.create_counter(
+    "content_service.requests.total",
+    description="Total requests to content service",
+)
+
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+HTTPXClientInstrumentor().instrument()
+
 RECOMMENDATION_SERVICE_URL = os.getenv(
-    "RECOMMENDATION_SERVICE_URL", "http://localhost:8003"
+    "RECOMMENDATION_SERVICE_URL", "http://recommendation-service:8000"
 )
 
 # Fault injection
@@ -18,7 +32,6 @@ FAULT_ENABLED = os.getenv("FAULT_ENABLED", "false").lower() == "true"
 FAULT_LATENCY_MS = int(os.getenv("FAULT_LATENCY_MS", "0"))
 FAULT_ERROR_RATE = float(os.getenv("FAULT_ERROR_RATE", "0.0"))
 
-# Simulated content catalog
 CONTENT = {
     "movie-1": {"id": "movie-1", "title": "The Matrix", "genre": "sci-fi", "year": 1999},
     "movie-2": {"id": "movie-2", "title": "Inception", "genre": "sci-fi", "year": 2010},
@@ -44,6 +57,7 @@ def health():
 
 @app.get("/content")
 def list_content():
+    request_counter.add(1, {"endpoint": "/content", "method": "GET"})
     maybe_inject_fault()
     logger.info("Listing all content")
     return list(CONTENT.values())
@@ -51,9 +65,11 @@ def list_content():
 
 @app.get("/content/{content_id}")
 def get_content(content_id: str):
+    request_counter.add(1, {"endpoint": "/content/id", "method": "GET"})
     maybe_inject_fault()
     item = CONTENT.get(content_id)
     if not item:
+        logger.warning("Content %s not found", content_id)
         raise HTTPException(status_code=404, detail=f"Content {content_id} not found")
     logger.info("Fetched content %s", content_id)
     return item
@@ -61,10 +77,15 @@ def get_content(content_id: str):
 
 @app.get("/recommendations/{user_id}")
 async def get_recommendations(user_id: str):
+    request_counter.add(1, {"endpoint": "/recommendations", "method": "GET"})
     maybe_inject_fault()
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{RECOMMENDATION_SERVICE_URL}/recommend/{user_id}", timeout=10.0
-        )
-        resp.raise_for_status()
-        return resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{RECOMMENDATION_SERVICE_URL}/recommend/{user_id}", timeout=10.0
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error("Upstream error from recommendation-service: %s", e.response.status_code)
+        raise HTTPException(status_code=502, detail="Recommendation service error")

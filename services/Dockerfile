@@ -6,6 +6,7 @@ WORKDIR /app
 COPY ${SERVICE_NAME}/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY shared/ ./shared/
 COPY ${SERVICE_NAME}/main.py .
 
 ENV SERVICE_NAME=${SERVICE_NAME}
